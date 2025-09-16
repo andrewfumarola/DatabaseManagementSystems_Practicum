@@ -29,7 +29,7 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 # Part B-2: connect to Aiven cloud-hosted database
 db_user <- 'avnadmin' 
-db_password <- 'AVNS_2RI4V25IYkODzXuVRMT'
+db_password <- '***'
 db_name <- 'defaultdb'
 db_host <- 'mysql-376f2d16-andrewfumarola-cs5200.f.aivencloud.com'
 db_port <- 26836
