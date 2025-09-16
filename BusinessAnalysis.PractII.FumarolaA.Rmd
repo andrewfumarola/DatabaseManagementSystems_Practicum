@@ -1,0 +1,485 @@
+---
+title: "Analysis of Film and Music Sales for Media Distributors, Inc."
+subtitle: "Prepared by Oakland Partners"
+author: "Andrew Fumarola"
+date: "Summer 2025 Semester"
+output:
+  html_document:
+    theme: paper
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    toc_collapsed: true
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r loadDBandLibs, warning = FALSE }
+packages <- c("DBI", "RMySQL", "knitr", "kableExtra")
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+invisible(lapply(packages, library, character.only = TRUE))
+
+# Part B-2: connect to Aiven cloud-hosted database
+db_user <- 'avnadmin' 
+db_password <- 'AVNS_2RI4V25IYkODzXuVRMT'
+db_name <- 'defaultdb'
+db_host <- 'mysql-376f2d16-andrewfumarola-cs5200.f.aivencloud.com'
+db_port <- 26836
+mydb <-  dbConnect(RMySQL::MySQL(), user = db_user, password = db_password,
+                   dbname = db_name, host = db_host, port = db_port)
+```
+
+# Background
+*Media Distributors, Inc.* is a Wichita, KY based distributor and seller of films and music for commercial purposes. For the past few years, it has managed its film and music sales separately using different applications. This division is historical as *Media Distributors* started distributing films and then acquired *SoundMania* about two years ago. As the two distribution channels were different, CTO Alvin Coelho made the decision not to integrate the *SoundMania’s* information systems and database with those of *Media Distributors*. This has not been a problem until now, however *Media Distributors* intends to make itself available for acquisition. To that end, an integrated view of the business, particularly sales, is needed.
+
+This report provides key sales, revenue, and customer metrics to showcase *Media Distributors* business. The analysis provided is based on data from a custom-built datamart containing data extracted from two operational databases.
+
+# Key Business Metrics
+This sections provides key revenue and customer information segmented by time, country, and business unit. Revenue numbers are in US$.
+
+## Sales Revenue
+
+```{r SalesRevCalc, warning = FALSE}
+year_most_sales_q = dbGetQuery(mydb, "SELECT SUM(total_revenue) AS yearly, year
+                                FROM SummarySales
+                                GROUP BY year
+                                ORDER BY yearly DESC
+                                LIMIT 1;")
+year <- year_most_sales_q[[2]]
+sales <- round(year_most_sales_q[[1]], 0)
+
+country_q <- dbGetQuery(mydb, "SELECT country, SUM(total_revenue) as country_total
+                                FROM SummarySales
+                                GROUP BY country
+                                ORDER BY country_total DESC
+                                LIMIT 5;")
+# Determining top 5 countries
+country_1 <- country_q[[1]][1]
+country_2 <- country_q[[1]][2]
+country_3 <- country_q[[1]][3]
+country_4 <- country_q[[1]][4]
+country_5 <- country_q[[1]][5]
+
+country_1_sales <- country_q[[2]][1]
+
+
+# Determining most recent two years
+most_recent_year <- dbGetQuery(mydb, "SELECT year 
+                               FROM SummarySales 
+                               ORDER BY year DESC 
+                               LIMIT 1")[[1]]
+second_most_recent_year <- most_recent_year - 1
+
+# Determine highest year for highest country
+highest_year_q <- dbGetQuery(mydb, paste0("SELECT year, sum(total_revenue) as total
+                           FROM SummarySales
+                           WHERE country = '", country_1, "'
+                           GROUP BY year
+                           ORDER BY total DESC
+                           LIMIT 1"))
+highest_year <- highest_year_q[[1]][1]
+highest_year_rev <- highest_year_q[[2]][1]
+
+second_highest_country <- dbGetQuery(mydb, paste0("
+                                    SELECT country, sum(total_revenue) as total
+                                    FROM SummarySales
+                                    WHERE year = ", highest_year, "
+                                    GROUP BY country
+                                    ORDER BY total DESC
+                                    LIMIT 2"))
+
+second_highest_country_name <- second_highest_country[[1]][2]
+second_highest_country_rev <- second_highest_country[[2]][2]
+
+```
+
+The year with the most sales was `r year` with a total revenue across both business units of `r scales::dollar(sales)`. The country with the most sales was `r country_1` with total sales across both units in `r highest_year` of `r scales::dollar(highest_year_rev)`. It was followed by `r second_highest_country_name` with `r scales::dollar(second_highest_country_rev)`.
+
+The table below shows sales revenue by country and ordered by total sales for the two most recent years, `r second_most_recent_year` and `r most_recent_year`. The table is restricted to the top five countries with the most sales. The column ‘Total’ in the table represents the total for all years for which there is data and not just the past two years.
+
+```{r top_5_rev, warning = FALSE}
+
+# List of top five countries for queries
+country_list <- paste(shQuote(country_q[[1]], type = "sh"), collapse = ", ")
+
+q_tot <- paste0("SELECT country AS `Country`, SUM(total_revenue) AS 'Total (All Years)'
+FROM SummarySales
+WHERE country IN (", country_list, ")
+GROUP BY country
+ORDER BY `Total (All Years)` DESC")
+
+q_second_most_recent <- paste0("SELECT country AS `Country`, SUM(total_revenue) AS `", second_most_recent_year, "`
+FROM SummarySales
+WHERE country IN (", country_list, ") AND year = ", second_most_recent_year, "
+GROUP BY country
+ORDER BY `", second_most_recent_year, "` DESC")
+
+q_most_recent <- paste0("SELECT country AS `Country`, SUM(total_revenue) AS `", most_recent_year, "`
+FROM SummarySales
+WHERE country IN (", country_list, ") AND year = ", most_recent_year, "
+GROUP BY country
+ORDER BY `", most_recent_year, "` DESC")
+
+totdf <- dbGetQuery(mydb, q_most_recent)
+second_most_df <- dbGetQuery(mydb, q_second_most_recent)
+most_df <- dbGetQuery(mydb, q_tot)
+
+top_5_rev <- Reduce(function(x, y) merge(x, y, by = "Country", all = TRUE),
+                      list(second_most_df, most_df, totdf))
+# https://www.rdocumentation.org/packages/purrr/versions/0.2.4/topics/reduce
+
+top_5_rev[is.na(top_5_rev)] <- 0
+top_5_rev <- top_5_rev[, c("Country", as.character(second_most_recent_year), as.character(most_recent_year), "Total (All Years)")]
+top_5_rev <- top_5_rev[order(-top_5_rev[["Total (All Years)"]]), ]
+
+top_5_rev %>% 
+  kable(format = "html", booktabs = TRUE, row.names = FALSE, 
+        caption = "Total Revenue For Top Five Countries For Most Recent Two Years") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+```
+
+```{r minmaxyears}
+min_year <- dbGetQuery(mydb, "SELECT year FROM SummarySales ORDER BY year ASC LIMIT 1")[[1]]
+max_year <- dbGetQuery(mydb, "SELECT year FROM SummarySales ORDER BY year DESC LIMIT 1")[[1]]
+
+```
+
+
+The table below shows the revenue broken down by quarter for the top five countries. It shows the total revenue for each quarter across all business units and years. So, for example, the column “Q1” is the total sales for music and film for all years for which there is data, which is from `r min_year` to `r max_year`.
+
+```{r quarteryRev}
+# Q1
+q1 <- dbGetQuery(mydb, paste0("SELECT country, AVG(total_revenue) 
+                FROM SummarySales 
+                WHERE country IN (", country_list, ") AND quarter = 1 
+                GROUP BY country"))
+# Q2
+q2 <- dbGetQuery(mydb, paste0("SELECT country, AVG(total_revenue) 
+                FROM SummarySales 
+                WHERE country IN (", country_list, ") AND quarter = 2 
+                GROUP BY country"))
+# Q3
+q3 <- dbGetQuery(mydb, paste0("SELECT country, AVG(total_revenue) 
+                FROM SummarySales 
+                WHERE country IN (", country_list, ") AND quarter = 3 
+                GROUP BY country"))
+# Q4
+q4 <- dbGetQuery(mydb, paste0("SELECT country, AVG(total_revenue) 
+                FROM SummarySales 
+                WHERE country IN (", country_list, ") AND quarter = 4 
+                GROUP BY country"))
+# Average
+av <- dbGetQuery(mydb, paste0("SELECT country, AVG(total_revenue) 
+                FROM SummarySales 
+                WHERE country IN (", country_list, ")
+                GROUP BY country"))
+
+colnames(q1)[2] <- "Q1"
+colnames(q2)[2] <- "Q2"
+colnames(q3)[2] <- "Q3"
+colnames(q4)[2] <- "Q4"
+colnames(av)[2] <- "Average"
+
+quarterly_df <- Reduce(function(x, y) merge(x, y, by = "country", all = TRUE),
+                       list(q1, q2, q3, q4, av))
+
+quarterly_df[is.na(quarterly_df)] <- 0
+quarterly_df$country <- factor(quarterly_df$country, levels = country_list)
+quarterly_df <- quarterly_df[order(quarterly_df$country), ]
+country_list_vector <- strsplit(gsub("'", "", country_list), ",\\s*")[[1]]
+quarterly_df$country <- country_list_vector
+quarterly_df$Q1 <- round(quarterly_df$Q1, 0)
+quarterly_df$Q2 <- round(quarterly_df$Q2, 0)
+quarterly_df$Q3 <- round(quarterly_df$Q3, 0)
+quarterly_df$Q4 <- round(quarterly_df$Q4, 0)
+quarterly_df$Average <- round(quarterly_df$Average, 0)
+
+names(quarterly_df)[names(quarterly_df) == "country"] <- "Country"
+
+quarterly_df %>% 
+  kable(format = "html", booktabs = TRUE, row.names = FALSE, 
+        caption = "Cumulative and Average Quarterly Revenue") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+
+```
+
+## Customer Distribution
+
+```{r CustDist}
+tot_cust <- dbGetQuery(mydb, "SELECT count(*) FROM FactCustomers")[[1]]
+tot_countries <- dbGetQuery(mydb, "SELECT count(DISTINCT country_id) FROM FactCustomers")[[1]]
+
+top_5 <- dbGetQuery(mydb, "SELECT d.country_name, count(*) AS NumCust
+                    FROM FactCustomers f
+                    JOIN DimCountry d ON d.country_id = f.country_id
+                    GROUP BY d.country_name
+                    ORDER BY NumCust DESC
+                    LIMIT 5")
+country_customer_1 <- top_5[[1]][1]
+country_customer_2 <- top_5[[1]][2]
+country_customer_3 <- top_5[[1]][3]
+country_customer_4 <- top_5[[1]][4]
+country_customer_5 <- top_5[[1]][5]
+
+
+
+```
+
+Across both business units, there are `r tot_cust` customers in `r tot_countries` different countries, with the majority of customers in `r country_customer_1`, `r country_customer_2`, and `r country_customer_3`.
+
+```{r CustTable}
+country_customer_list <- c(country_customer_1,
+                           country_customer_2,
+                           country_customer_3,
+                           country_customer_4,
+                           country_customer_5)
+
+country_customer_list <- paste(shQuote(country_customer_list), collapse = ", ")
+
+cust_df <- dbGetQuery(mydb, paste0("SELECT d.country_name AS Country, count(*) AS cust_count
+                FROM FactCustomers f
+                JOIN DimCountry d ON d.country_id = f.country_id
+                WHERE d.country_name IN (", country_customer_list, ")
+                GROUP BY d.country_name
+                LIMIT 5"))
+
+country_customer_list_vector <- strsplit(gsub("'", "", country_customer_list), ",\\s*")[[1]]
+cust_df$Country <- factor(cust_df$Country, levels = country_customer_list_vector)
+cust_df <- cust_df[order(cust_df$Country), ]
+
+cust_df_film <- dbGetQuery(mydb, paste0("SELECT d.country_name AS Country, count(*) AS cust_count
+                FROM FactCustomers f
+                JOIN DimCountry d ON d.country_id = f.country_id
+                WHERE d.country_name IN (", country_customer_list, ") AND type_id = 1
+                GROUP BY d.country_name
+                LIMIT 5"))
+
+cust_df_film$Country <- factor(cust_df_film$Country, levels = country_customer_list_vector)
+cust_df_film <- cust_df_film[order(cust_df_film$Country), ]
+
+cust_df_music <- dbGetQuery(mydb, paste0("SELECT d.country_name AS Country, count(*) AS cust_count
+                FROM FactCustomers f
+                JOIN DimCountry d ON d.country_id = f.country_id
+                WHERE d.country_name IN (", country_customer_list, ") AND type_id = 2
+                GROUP BY d.country_name
+                LIMIT 5"))
+
+cust_df_music$Country <- factor(cust_df_music$Country, levels = country_customer_list_vector)
+cust_df_music <- cust_df_music[order(cust_df_music$Country), ]
+
+
+cust_full <- Reduce(function(x, y) merge(x, y, by = "Country", all = TRUE),
+                       list(cust_df_film, cust_df_music, cust_df))
+cust_full[is.na(cust_full)] <- 0
+
+colnames(cust_full) <- c("Country", "Film", "Music", "Total")
+
+cust_full <- cust_full[order(-cust_full$Total), ]
+
+cust_full %>% 
+  kable(format = "html", booktabs = TRUE, row.names = FALSE, 
+        caption = "Customers by Business Unit") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+
+```
+
+## Film vs Music Revenue
+Sales fluctuate over time and the table below shows total revenue per month for the years for which we have data.
+```{r filmMusicRev, warning=FALSE}
+
+film_vec <- c()
+music_vec <- c()
+
+for (year in min_year:max_year) {
+  film_q <- paste0("SELECT SUM(revenue) 
+                    FROM FactSales
+                    WHERE CAST(date_id AS CHAR) LIKE '", year, "%'
+                    AND type_id = 1")
+  film_vec <- c(film_vec, dbGetQuery(mydb, film_q)[[1]])
+  
+  music_q <- paste0("SELECT SUM(revenue) 
+                    FROM FactSales
+                    WHERE CAST(date_id AS CHAR) LIKE '", year, "%'
+                    AND type_id = 2")
+  music_vec <- c(music_vec, dbGetQuery(mydb, music_q)[[1]])
+}
+film_vec[is.na(film_vec)] <- 0.00
+music_vec[is.na(music_vec)] <- 0.00
+
+film_vec <- c(film_vec, sum(film_vec))
+music_vec <- c(music_vec, sum(music_vec))
+
+film_music <- data.frame(rbind(film_vec, music_vec))
+colnames(film_music) <- as.character(min_year:max_year)
+colnames(film_music)[ncol(film_music)] <- "Total"
+
+rownames(film_music)[1] <- "Film"
+rownames(film_music)[2] <- "Music"
+
+film_music %>% 
+  kable(format = "html", booktabs = TRUE, row.names = TRUE, 
+        caption = "Revenue by year and business unit") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+
+```
+
+The graph below illustrates the quarterly growth of the film and music business over the past years for which we have data.
+
+```{r chart, warning = FALSE}
+film_vec <- c()
+music_vec <- c()
+x_axis_vec <- c()
+
+for (year in min_year:max_year) {
+  for (quarter in 1:4) {
+    film_q <- paste0("SELECT SUM(revenue) 
+                    FROM FactSales f
+                    JOIN DimDate d on f.date_id = d.date_id
+                    WHERE d.year = ", year, " AND d.quarter = ", quarter, "
+                    AND type_id = 1")
+    film_vec <- c(film_vec, dbGetQuery(mydb, film_q)[[1]])
+    
+    music_q <- paste0("SELECT SUM(revenue) 
+                    FROM FactSales f
+                    JOIN DimDate d on f.date_id = d.date_id
+                    WHERE d.year = ", year, " AND d.quarter = ", quarter, "
+                    AND type_id = 2")
+    music_vec <- c(music_vec, dbGetQuery(mydb, music_q)[[1]])
+    
+    x_axis_vec <- c(x_axis_vec, paste0(year, " Q", quarter))
+  }
+}
+
+film_vec[is.na(film_vec)] <- 0
+music_vec[is.na(music_vec)] <- 0
+
+chart_data <- data.frame(
+  Quarter = x_axis_vec,
+  Film = film_vec,
+  Music = music_vec
+)
+chart_data$Quarter <- factor(chart_data$Quarter, levels = x_axis_vec)
+
+plot(1:length(chart_data$Quarter), chart_data$Film, type = "n",
+     xaxt = "n", ylim = range(c(chart_data$Film, chart_data$Music)),
+     xlab = "Quarter", ylab = "Revenue ($)", main = "Revenue Comparison by Business Unit")
+
+grid(nx = NA, ny = NULL, col = "lightgray", lty = "dotted")
+
+axis(1, at = 1:length(chart_data$Quarter), labels = chart_data$Quarter, las = 2, cex.axis=0.7)
+
+lines(1:length(chart_data$Quarter), chart_data$Film, col = "red", lwd = 2)
+lines(1:length(chart_data$Quarter), chart_data$Music, col = "blue", lwd = 2)
+
+points(1:length(chart_data$Quarter), chart_data$Film, col = "red", pch = 16)
+points(1:length(chart_data$Quarter), chart_data$Music, col = "blue", pch = 16)
+
+legend("topright", legend = c("Film", "Music"), col = c("red", "blue"), lwd = 2, pch = 16)
+
+# ChatGPT was used to help with plot function syntax
+```
+
+In terms of units sold, the table below sheds light on this by country and by business unit.
+
+```{r unitsChartData, warning = FALSE}
+
+country_q <- dbGetQuery(mydb, "SELECT country, SUM(total_revenue) as country_total
+                                FROM SummarySales
+                                GROUP BY country
+                                ORDER BY country_total DESC
+                                LIMIT 3;")
+# Determining top 5 countries
+country_1 <- country_q[[1]][1]
+country_2 <- country_q[[1]][2]
+country_3 <- country_q[[1]][3]
+
+country_list <- c(country_1, country_2, country_3)
+years <- ((most_recent_year-2):most_recent_year)
+quarters <- (1:4)
+data_rows <- list()
+
+# Looping over country, year, quarter to build table
+# ChatGPT helped with error locating in this snippet
+
+for (country in country_list) {
+  country_m <- matrix(0, nrow = 6, ncol = 3)
+  rownames(country_m) <- c("Q1", "Q2", "Q3", "Q4", "Total", "Average")
+  colnames(country_m) <- as.character(years)
+  for (i in seq_along(years)) {
+    y <- years[i]
+    quarters_count <- numeric(4)
+    for (quarter in (quarters)) {
+      q <- paste0("SELECT count(*)
+                  FROM FactSales f
+                  JOIN DimDate d on d.date_id = f.date_id
+                  JOIN DimCountry dc on dc.country_id = f.country_id
+                  WHERE d.year = ", y, " AND d.quarter = ", quarter, "
+                    AND f.country_id = 
+                      (SELECT country_id FROM DimCountry WHERE country_name = '", country, "')")
+      value <- dbGetQuery(mydb, q)
+      count <- if (nrow(value) == 0 || is.na(value[1,1])) 0 else value[1,1]
+      quarters_count[quarter] <- count
+    }
+    country_m[1:4, i] <- quarters_count
+    country_m[5, i] <- sum(quarters_count)
+    country_m[6, i] <- mean(quarters_count)
+  }
+  temp <- as.data.frame(country_m)
+  temp <- cbind(Country = country, Quarter = rownames(temp), temp)
+  temp$Total <- rowSums(temp[, as.character(years)])
+  temp$Average <- round(rowMeans(temp[, as.character(years)]), 2)
+  data_rows[[country]] <- temp
+}
+full_chart <- do.call(rbind, data_rows)
+
+colnames(full_chart) <- c("Country", "Quarter", years[1], years[2], years[3], "Total", "Average")
+
+full_chart %>% 
+  kable(format = "html", booktabs = TRUE, row.names = FALSE, 
+        caption = "Number of units sold by country and business unit for past three years.") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+
+```
+
+# Summary and Recommendations
+
+```{r summaryCalcs}
+year_most_sales_q = dbGetQuery(mydb, "SELECT SUM(total_revenue) AS yearly, year
+                                FROM SummarySales
+                                GROUP BY year
+                                ORDER BY yearly DESC
+                                LIMIT 1;")
+year <- year_most_sales_q[[2]]
+sales <- round(year_most_sales_q[[1]], 0)
+
+film_sales <- dbGetQuery(mydb, "SELECT SUM(revenue) FROM FactSales WHERE type_id = 1")[[1]]
+music_sales <- dbGetQuery(mydb, "SELECT SUM(revenue) FROM FactSales WHERE type_id = 2")[[1]]
+
+film_music_ratio <- film_sales/music_sales
+if (film_music_ratio < 1.5 && film_music_ratio > .75) {
+  summ_response <- "Music and film sales contribute almost equally to revenue, "
+} else if (film_music_ratio > 1.5) {
+  summ_response <- "Film sales contribute significantly more to revenue than music, "
+} else summ_response <- "Music sales contribute significantly more to revenue than film, "
+
+
+```
+
+
+Based on the available data, the analysis of *Media Distributors, Inc.’s* film and music sales reveals a robust revenue generation pattern, with Canada and the United States emerging as the primary contributors to the company’s total sales. Between `r min_year` and `r max_year`, sales peaked in `r year`, with total revenue reaching `r scales::dollar(sales)` across both business units. `r summ_response`and sales patterns fluctuate by quarter and geography. The customer base is concentrated in `r country_customer_1`, `r country_customer_2`, and `r country_customer_3`, which also serve as the top-performing markets.
+
+Despite these strengths, *Media Distributors, Inc.* faces challenges related to its siloed information systems. With plans for acquisition, the company must present a cohesive and integrated business view to appeal to potential buyers. With nearly `r tot_cust` customers across `r tot_countries` countries, *Media Distributors* should invest in customer relationship management (CRM) tools to personalize outreach and foster loyalty. Segmenting customers by preferences (film or music) and spending habits can optimize targeting.
+
+
+```{r dbDisconnect}
+dbDisconnect(mydb)
+```
+
